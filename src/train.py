@@ -3,10 +3,11 @@ import mlflow
 import mlflow.sklearn
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, recall_score, f1_score
 from sklearn.pipeline import Pipeline
+from mlflow.models.signature import infer_signature
 from src.preprocess import create_pipeline
-
 
 RAW_DATA_PATH = "data/raw/data.csv"
 LABELED_DATA_PATH = "data/processed/data.csv"
@@ -46,52 +47,62 @@ def train():
     mlflow.set_experiment(EXPERIMENT_NAME)
     mlflow.sklearn.autolog(log_models=False)
 
-    with mlflow.start_run() as run:
-        print(f"Run ID: {run.info.run_id}")
+    print("Calibrage du pipeline de nettoyage sur X_raw...")
+    preprocessing_pipeline = create_pipeline()
+    preprocessing_pipeline.fit(X_raw)
 
-        print("Calibrage du pipeline de nettoyage sur X_raw...")
-        preprocessing_pipeline = create_pipeline()
-        preprocessing_pipeline.fit(X_raw)
+    models_to_train = [
+        {
+            "name": "SVC",
+            "model": SVC(C=10, kernel='linear', gamma='scale', probability=True, random_state=42)
+        },
+        {
+            "name": "LogisticRegression",
+            "model": LogisticRegression(C=10, penalty='l1', solver='saga', random_state=42)
+        }
+    ]
 
-        print("Entraînement du SVC sur X_labeled...")
-        clf = SVC(C=10, kernel='linear', gamma='scale', probability=True, random_state=42)
-        clf.fit(X_train_lbl, y_train_lbl)
+    for item in models_to_train:
+        model_name = item["name"]
+        clf = item["model"]
 
-        final_model = Pipeline([
-            ('preprocessor', preprocessing_pipeline),
-            ('classifier', clf)
-        ])
+        with mlflow.start_run(run_name=model_name) as run:
+            print(f"Run ID ({model_name}): {run.info.run_id}")
+            print(f"Entraînement du {model_name} sur X_labeled...")
+            
+            clf.fit(X_train_lbl, y_train_lbl)
 
-        y_pred = clf.predict(X_test_lbl)
-        acc = accuracy_score(y_test_lbl, y_pred)
-        rec = recall_score(y_test_lbl, y_pred, average='macro')
-        f1 = f1_score(y_test_lbl, y_pred, average='macro')
+            final_model = Pipeline([
+                ('preprocessor', preprocessing_pipeline),
+                ('classifier', clf)
+            ])
 
-        print(f"Résultats :\n- Accuracy: {acc:.4f}\n- Recall: {rec:.4f}\n- F1: {f1:.4f}")
-        
-        mlflow.log_metrics({
-            "test_accuracy": acc,
-            "test_recall": rec,
-            "test_f1": f1
-        })
+            y_pred = clf.predict(X_test_lbl)
+            acc = accuracy_score(y_test_lbl, y_pred)
+            rec = recall_score(y_test_lbl, y_pred, average='macro')
+            f1 = f1_score(y_test_lbl, y_pred, average='macro')
 
-        from mlflow.models.signature import infer_signature
-        
-        signature = infer_signature(X_raw.head(), clf.predict(X_train_lbl.head()))
+            print(f"Résultats {model_name} :\n- Accuracy: {acc:.4f}\n- Recall: {rec:.4f}\n- F1: {f1:.4f}")
+            
+            mlflow.log_metrics({
+                "test_accuracy": acc,
+                "test_recall": rec,
+                "test_f1": f1
+            })
+            mlflow.log_param("model_type", model_name)
 
-        if acc > 0.70:
-            print("Succès. Enregistrement dans le Registry.")
-            mlflow.sklearn.log_model(
-                sk_model=final_model,
-                artifact_path="model",
-                registered_model_name=MODEL_NAME,
-                signature=signature
-            )
-        else:
-            mlflow.sklearn.log_model(sk_model=final_model, artifact_path="model", signature=signature)
+            signature = infer_signature(X_raw.head(), clf.predict(X_train_lbl.head()))
 
-
-
+            if acc > 0.70:
+                print(f"Succès. Enregistrement de {model_name} dans le Registry.")
+                mlflow.sklearn.log_model(
+                    sk_model=final_model,
+                    artifact_path="model",
+                    registered_model_name=MODEL_NAME,
+                    signature=signature
+                )
+            else:
+                mlflow.sklearn.log_model(sk_model=final_model, artifact_path="model", signature=signature)
 
 if __name__ == "__main__":
     train()

@@ -6,7 +6,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 
 
-PHYSIOLOGICAL_COLS = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+NON_ZERO_COLS = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
 
 class ZeroToNaN(BaseEstimator, TransformerMixin):
     def __init__(self, columns=None):
@@ -30,7 +30,7 @@ class ZeroToNaN(BaseEstimator, TransformerMixin):
 def create_pipeline():
     
     return Pipeline(steps=[
-        ('zero_to_nan', ZeroToNaN(columns=PHYSIOLOGICAL_COLS)),
+        ('zero_to_nan', ZeroToNaN(columns=NON_ZERO_COLS)),
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', StandardScaler())
     ])
