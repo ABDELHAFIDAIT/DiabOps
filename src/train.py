@@ -44,6 +44,8 @@ def train():
         X_labeled, y_labeled, test_size=0.2, random_state=42
     )
 
+    mlflow.set_tracking_uri("file:./mlruns")
+
     mlflow.set_experiment(EXPERIMENT_NAME)
     mlflow.sklearn.autolog(log_models=False)
 
