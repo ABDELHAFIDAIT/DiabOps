@@ -1,36 +1,31 @@
-import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
+import numpy as np
 from sklearn.preprocessing import StandardScaler
+from sklearn.impute import KNNImputer
 
 
-NON_ZERO_COLS = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-
-class ZeroToNaN(BaseEstimator, TransformerMixin):
-    def __init__(self, columns=None):
-        self.columns = columns
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X_copy = X.copy()
-        
-        if isinstance(X_copy, pd.DataFrame):
-            for col in self.columns:
-                if col in X_copy.columns:
-                    X_copy[col] = pd.to_numeric(X_copy[col], errors='coerce')
-                    X_copy[col] = X_copy[col].mask(X_copy[col] == 0, np.nan)
-        
-        return X_copy
-
-
-def create_pipeline():
+def preprocess(source: str) -> pd.DataFrame :
+    data = pd.read_csv(source)
     
-    return Pipeline(steps=[
-        ('zero_to_nan', ZeroToNaN(columns=NON_ZERO_COLS)),
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
-    ])
+    if "Unnamed: 0" in data.columns:
+        data = data.drop(columns=["Unnamed: 0"])
+    
+    cols_with_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+
+    data[cols_with_zeros] = data[cols_with_zeros].replace(0, np.nan)
+    
+    imputer = KNNImputer(n_neighbors=5)
+    data[cols_with_zeros] = imputer.fit_transform(data[cols_with_zeros])
+    
+    return data
+
+
+
+def scaling(data: pd.DataFrame) :
+    scaler = StandardScaler()
+    
+    numeric_cols = data.select_dtypes(include=[np.number]).columns
+    
+    data[numeric_cols] = scaler.fit_transform(data[numeric_cols])
+    
+    return data, scaler
