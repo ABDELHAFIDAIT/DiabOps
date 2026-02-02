@@ -1,26 +1,19 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PatientData(BaseModel):
-    Pregnancies: int
-    Glucose: float
-    BloodPressure: float
-    SkinThickness: float
-    Insulin: float
-    BMI: float
-    DiabetesPedigreeFunction: float
-    Age: int
+    Pregnancies : int                   = Field(..., example=2)
+    Glucose : float                     = Field(..., example=90)
+    BloodPressure : float               = Field(..., example=80)
+    SkinThickness : float               = Field(..., example=30)
+    Insulin : float                     = Field(..., example=5)
+    BMI : float                         = Field(..., example=20.6)
+    DiabetesPedigreeFunction : float    = Field(..., example=0.627)
+    Age : int                           = Field(..., example=30)
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "Pregnancies": 2,
-                "Glucose": 148.0,
-                "BloodPressure": 72.0,
-                "SkinThickness": 35.0,
-                "Insulin": 0.0,
-                "BMI": 33.6,
-                "DiabetesPedigreeFunction": 0.627,
-                "Age": 50
-            }
-        }
+
+class PredictionResponse(BaseModel):
+    prediction : int
+    risk_level : str
+    probability : float | None
+    

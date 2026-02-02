@@ -1,70 +1,137 @@
-import pandas as pd
-import mlflow
-import mlflow.sklearn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from contextlib import asynccontextmanager
-from prometheus_fastapi_instrumentator import Instrumentator
-from app.schemas import PatientData
+from app.schemas import PatientData, PredictionResponse
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import mlflow.pyfunc
+import mlflow
+import joblib
+import pandas as pd
+import os
+import time
+
 
 model = None
+scaler = None
 
+def load_model():
+    global model
+    global scaler
+    mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    mlflow.set_tracking_uri(mlflow_uri)
+    try:
+        model = mlflow.pyfunc.load_model("models:/DiabRiskModel@champion")
+        scaler = joblib.load("./src/utils/scaler.pkl")
+        return True
+    except Exception:
+        return False
+    
+
+    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model
-
-    mlflow.set_tracking_uri("file:///code/mlruns")
-    experiment_name = "DiabOps_Experiment"
-    
-    print(f"Recherche du modèle pour : {experiment_name} ...")
-    
-    try:
-        current_experiment = mlflow.get_experiment_by_name(experiment_name)
-        if current_experiment is None:
-            raise Exception("Expérience introuvable dans le conteneur.")
-
-        runs = mlflow.search_runs(
-            experiment_ids=[current_experiment.experiment_id],
-            order_by=["attribute.start_time DESC"]
-        )
-        
-        if runs.empty:
-             raise Exception("Aucun run trouvé.")
-
-        best_run_id = runs.iloc[0].run_id
-        model_uri = f"runs:/{best_run_id}/model"
-        
-        print(f"Chargement depuis le Run ID : {best_run_id}")
-        model = mlflow.sklearn.load_model(model_uri)
-        print("Modèle chargé avec succès !")
-
-    except Exception as e:
-        print(f"Erreur critique : {e}")
-
-
-        import os
-        if os.path.exists("/code/mlruns"):
-             print(f"Contenu mlruns : {os.listdir('/code/mlruns')}")
-        else:
-             print("Dossier /code/mlruns inexistant !")
+    load_model()
     
     yield
-    model = None
+
+    
+app = FastAPI(title="DiabRisk API", lifespan=lifespan)
+
+    
+@app.get("/")
+def health_check():
+    return {"status": "running", "model_loaded": model is not None, "scaler_loaded": scaler is not None}
 
 
 
-app = FastAPI(title="DiabOps API", lifespan=lifespan)
-Instrumentator().instrument(app).expose(app)
+
+# Metrics
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total number of HTTP requests",
+    ["method", "endpoint", "status"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "http_request_latency_seconds",
+    "Latency of HTTP requests",
+    ["endpoint"]
+)
+
+INFERENCE_TIME = Histogram(
+    "model_inference_seconds",
+    "Time spent during model inference"
+)
+
+ERROR_COUNT = Counter(
+    "http_errors_total",
+    "Total number of errors",
+    ["endpoint"]
+)
 
 
 
-@app.post("/predict")
-def predict(patient: PatientData):
-    if not model:
-        raise HTTPException(status_code=503, detail="Le modèle n'est pas encore chargé.")
-    try:
-        input_data = pd.DataFrame([patient.dict()])
-        prediction = model.predict(input_data)
-        risk_label = "Elevé" if prediction[0] == 0 else "Faible"
-        return {"cluster": int(prediction[0]), "risk_prediction": risk_label}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    latency = time.time() - start_time
+
+    endpoint = request.url.path
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=endpoint,
+        status=response.status_code
+    ).inc()
+
+    REQUEST_LATENCY.labels(endpoint=endpoint).observe(latency)
+
+    if response.status_code >= 400:
+        ERROR_COUNT.labels(endpoint=endpoint).inc()
+
+    return response
+
+
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(data: PatientData):
+    start = time.time()
+    
+    if model is None or scaler is None :
+        raise HTTPException(status_code=500, detail="Model or scaler not loaded !")
+    
+    try :
+        input_df = pd.DataFrame([data.model_dump()])
+        column_names = input_df.columns
+        scaled_array = scaler.transform(input_df)
+        
+        scaled_df = pd.DataFrame(scaled_array, columns=column_names)
+        
+        prediction = model.predict(scaled_df)
+        
+        print(prediction)
+        
+        if hasattr(model, "predict_proba") :
+            probability = round(float(app.state.model.predict_proba(scaled_df).max()), 2)
+        else :
+            probability = None
+        
+        risk = "High Risk" if prediction[0] == 0 else "Low Risk"
+        
+        INFERENCE_TIME.observe(time.time() - start)
+        
+        return PredictionResponse(
+            prediction=int(prediction[0]),
+            risk_level=risk,
+            probability=probability
+        )
+    
+    except Exception as e :
+        raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
+
+
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+

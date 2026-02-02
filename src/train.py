@@ -1,110 +1,119 @@
 import pandas as pd
-import mlflow
-import mlflow.sklearn
+import numpy as np
+from preprocess import preprocess, scaling
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, recall_score, f1_score
-from sklearn.pipeline import Pipeline
-from mlflow.models.signature import infer_signature
-from src.preprocess import create_pipeline
+from imblearn.over_sampling import RandomOverSampler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import mlflow
+from mlflow import sklearn as mlflow_sklearn
+from mlflow.models import infer_signature
+from mlflow.tracking import MlflowClient
+import joblib
+import os
 
-RAW_DATA_PATH = "data/raw/data.csv"
-LABELED_DATA_PATH = "data/processed/data.csv"
-EXPERIMENT_NAME = "DiabOps_Experiment"
-MODEL_NAME = "diabrisk-model"
 
-def train():
-    print("Démarrage du script ...")
+RAW_DATA_PATH = "../data/raw/data.csv"
+LABELED_DATA_PATH = "../data/labeled/data.csv"
+EXPERIMENT_NAME = "Diabetes_Risk_Classification"
+MODEL_NAME = "DiabRiskModel"
+
+
+def train() :
+    raw_data = preprocess(RAW_DATA_PATH)
+    scaled_data, scaler = scaling(raw_data)
     
-    try:
-        df_raw = pd.read_csv(RAW_DATA_PATH)
-        df_labeled = pd.read_csv(LABELED_DATA_PATH)
-        print(f"Chargé Raw: {df_raw.shape}, Labelled: {df_labeled.shape}")
-    except FileNotFoundError as e:
-        print(f"Erreur fichier: {e}")
-        return
-
-    drop_cols = ['Cluster', 'risk_category', 'Unnamed: 0']
+    os.makedirs("./utils", exist_ok=True)
+    joblib.dump(scaler, "./utils/scaler.pkl")
     
-    X_raw = df_raw.drop([c for c in drop_cols if c in df_raw.columns], axis=1)
-
-    X_labeled = df_labeled.drop([c for c in drop_cols if c in df_labeled.columns], axis=1)
+    labeled_data = pd.read_csv(LABELED_DATA_PATH)
     
-    if "Cluster" not in df_labeled.columns:
-        print("Erreur: Colonne 'Cluster' manquante dans labeled_data.csv")
-        return
+    X = scaled_data
+    y = labeled_data['Cluster']
     
-    y_labeled = df_labeled["Cluster"]
-
-    print(f"Features utilisées (Raw): {X_raw.shape}")
-    print(f"Features utilisées (Labelled): {X_labeled.shape}")
-
-    X_train_lbl, X_test_lbl, y_train_lbl, y_test_lbl = train_test_split(
-        X_labeled, y_labeled, test_size=0.2, random_state=42
-    )
-
-    mlflow.set_tracking_uri("file:./mlruns")
-
-    mlflow.set_experiment(EXPERIMENT_NAME)
-    mlflow.sklearn.autolog(log_models=False)
-
-    print("Calibrage du pipeline de nettoyage sur X_raw...")
-    preprocessing_pipeline = create_pipeline()
-    preprocessing_pipeline.fit(X_raw)
-
-    models_to_train = [
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    ros = RandomOverSampler(random_state=42)
+    
+    X_train, y_train = ros.fit_resample(X_train, y_train)
+    
+    configs = [
         {
-            "name": "SVC",
-            "model": SVC(C=10, kernel='linear', gamma='scale', probability=True, random_state=42)
+            "name" : "SVC",
+            "model" : SVC(C=10, gamma='scale', kernel='linear', probability=True, random_state=42),
+            "params" : {'C': 10, 'gamma': 'scale', 'kernel': 'linear'}
         },
         {
-            "name": "LogisticRegression",
-            "model": LogisticRegression(C=10, penalty='l1', solver='saga', random_state=42)
+            "name" : "LogisticRegression",
+            "model" : LogisticRegression(C=10, penalty='l1', solver='saga', random_state=42),
+            "params" : {'C': 10, 'penalty': 'l1', 'solver': 'saga'}
         }
     ]
-
-    for item in models_to_train:
-        model_name = item["name"]
-        clf = item["model"]
-
-        with mlflow.start_run(run_name=model_name) as run:
-            print(f"Run ID ({model_name}): {run.info.run_id}")
-            print(f"Entraînement du {model_name} sur X_labeled...")
+    
+    mlflow.set_experiment(EXPERIMENT_NAME)
+    
+    best_accuracy = 0
+    best_model_name = ""
+    best_model = None
+    best_run_id = None
+    
+    for config in configs :
+        model_name = config["name"]
+        clf = config["model"]
+        model_params = config["params"]
+        
+        with mlflow.start_run(run_name=model_name) as run :
+            clf.fit(X_train, y_train)
             
-            clf.fit(X_train_lbl, y_train_lbl)
-
-            final_model = Pipeline([
-                ('preprocessor', preprocessing_pipeline),
-                ('classifier', clf)
-            ])
-
-            y_pred = clf.predict(X_test_lbl)
-            acc = accuracy_score(y_test_lbl, y_pred)
-            rec = recall_score(y_test_lbl, y_pred, average='macro')
-            f1 = f1_score(y_test_lbl, y_pred, average='macro')
-
-            print(f"Résultats {model_name} :\n- Accuracy: {acc:.4f}\n- Recall: {rec:.4f}\n- F1: {f1:.4f}")
+            y_pred = clf.predict(X_test)
+            
+            accuracy = accuracy_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, average='weighted')
+            recall = recall_score(y_test, y_pred, average='weighted')
+            f1 = f1_score(y_test, y_pred, average='weighted')
+            
+            mlflow.log_param("model_name", model_name)
+            mlflow.log_params(model_params)
             
             mlflow.log_metrics({
-                "test_accuracy": acc,
-                "test_recall": rec,
+                "test_accuracy": accuracy,
+                "test_precision": precision,
+                "test_recall": recall,
                 "test_f1": f1
             })
-            mlflow.log_param("model_type", model_name)
+            
+            signature = infer_signature(X_train, clf.predict(X_train))
+            
+            mlflow_sklearn.log_model(
+                sk_model=clf,
+                name="model", 
+                signature=signature
+            )
+            
+            mlflow.log_artifact("./utils/scaler.pkl", artifact_path="utils")
+            
+            if accuracy > best_accuracy :
+                best_accuracy = accuracy
+                best_model_name = model_name
+                best_model = clf
+                best_run_id = run.info.run_id
+    
+    if best_run_id is not None :
+        
+        model_uri = f"runs:/{best_run_id}/model"
+        
+        model_version = mlflow.register_model(
+            model_uri=model_uri,
+            name=MODEL_NAME,
+        )
+        
+        client = MlflowClient()
+        
+        client.set_registered_model_alias(MODEL_NAME, "champion", 1)
+        
 
-            signature = infer_signature(X_raw.head(), clf.predict(X_train_lbl.head()))
-
-            if acc > 0.70:
-                print(f"Succès. Enregistrement de {model_name} dans le Registry.")
-                mlflow.sklearn.log_model(
-                    sk_model=final_model,
-                    artifact_path="model",
-                    registered_model_name=MODEL_NAME,
-                    signature=signature
-                )
-            else:
-                mlflow.sklearn.log_model(sk_model=final_model, artifact_path="model", signature=signature)
-
-if __name__ == "__main__":
+if __name__ == "__main__" :
     train()
+        
+    
