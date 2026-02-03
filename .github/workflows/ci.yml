@@ -59,7 +59,7 @@ jobs:
           python-version: '3.10'
       
       - name: Install dependencies
-        run: pip install pandas numpy scikit-learn
+        run: pip install pandas numpy scikit-learn imbalanced-learn
       
       - name: Validate model performance
         run: |
