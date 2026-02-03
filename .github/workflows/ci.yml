@@ -40,9 +40,9 @@ jobs:
         run: |
           python -c "
           import pandas as pd
-          df = pd.read_csv('src/data/raw_data.csv')
+          df = pd.read_csv('data/raw/data.csv')
           assert len(df) > 100, 'Not enough data'
-          required = ['Glucose', 'BloodPressure', 'BMI', 'Age']
+          required = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI', 'Age', 'Pregnancies']
           for col in required:
               assert col in df.columns, f'Missing {col}'
           print(f'Data validation passed: {len(df)} rows')
@@ -69,25 +69,45 @@ jobs:
           from sklearn.model_selection import train_test_split
           from sklearn.ensemble import RandomForestClassifier
           from sklearn.metrics import accuracy_score
-          from sklearn.impute import SimpleImputer
+          from sklearn.impute import KNNImputer
+          from imblearn.over_sampling import RandomOverSampler
+          from sklearn.preprocessing import StandardScaler
+          from sklearn.svm import SVC
           
-          df = pd.read_csv('src/data/raw_data.csv')
-          df = df.drop(columns=['Unnamed: 0'], errors='ignore')
-          df = df.replace(0, np.nan)
+          data = pd.read_csv('data/raw/data.csv')
+          if "Unnamed: 0" in data.columns:
+            data = data.drop(columns=["Unnamed: 0"])
           
-          imputer = SimpleImputer(strategy='mean')
-          df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+          cols_with_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
+          data[cols_with_zeros] = data[cols_with_zeros].replace(0, np.nan)
           
-          y = (df_imputed['Glucose'] > df_imputed['Glucose'].median()).astype(int)
-          X = df_imputed.drop(columns=['Glucose'])
+          imputer = KNNImputer(n_neighbors=5)
+          data[cols_with_zeros] = imputer.fit_transform(data[cols_with_zeros])
           
+          scaler = StandardScaler()
+          numeric_cols = data.select_dtypes(include=[np.number]).columns
+          data[numeric_cols] = scaler.fit_transform(data[numeric_cols])
+          
+          labeled_data = pd.read_csv(data/labeled/data.csv)
+
+          X = data
+          y = labeled_data['Cluster']
+
           X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-          model = RandomForestClassifier(random_state=42)
+    
+          ros = RandomOverSampler(random_state=42)
+          
+          X_train, y_train = ros.fit_resample(X_train, y_train)
+          X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+          
+          model = SVC(C=10, gamma='scale', kernel='linear', probability=True, random_state=42)
           model.fit(X_train, y_train)
           
-          acc = accuracy_score(y_test, model.predict(X_test))
-          assert acc > 0.6, f'Accuracy {acc:.2f} below 0.6'
-          print(f'Model validation passed: accuracy={acc:.2f}')
+          y_pred = clf.predict(X_test)
+          accuracy = accuracy_score(y_test, y_pred)
+          
+          assert accuracy > 0.8, f'Accuracy {accuracy:.2f} below 0.8'
+          print(f'Model validation passed: accuracy={accuracy:.2f}')
           "
 
   build:
