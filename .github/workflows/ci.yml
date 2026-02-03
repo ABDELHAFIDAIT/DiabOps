@@ -76,7 +76,7 @@ jobs:
           
           data = pd.read_csv('data/raw/data.csv')
           if "Unnamed: 0" in data.columns:
-            data = data.drop(columns=["Unnamed: 0"])
+              data = data.drop(columns=["Unnamed: 0"])
           
           cols_with_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
           data[cols_with_zeros] = data[cols_with_zeros].replace(0, np.nan)
