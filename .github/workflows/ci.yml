@@ -114,7 +114,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Build Docker image
-        run: docker build -f docker/Dockerfile -t diabops:test .
+        run: docker build -f Dockerfile -t diabops:test .
 
   test:
     runs-on: ubuntu-latest
