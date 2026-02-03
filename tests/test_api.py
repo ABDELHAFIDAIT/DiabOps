@@ -3,7 +3,7 @@ import sys
 import os
 from app.main import app
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
 
 client = TestClient(app)
 
